@@ -2,13 +2,13 @@ import streamlit as st
 from datetime import datetime
 import pandas as pd
 from database import (
-    verificar_login, get_connection, registrar_estudo, 
+    verificar_login, criar_usuario, get_connection, registrar_estudo, 
     registrar_simulado, get_progresso_hoje
 )
 
 st.set_page_config(page_title="MedPlanner", page_icon="🩺", layout="wide", initial_sidebar_state="collapsed")
 
-# Estilos CSS
+# Estilos CSS para centralizar e organizar as abas
 st.markdown("""
     <style>
     [data-testid="stSidebarNav"] {display: none;}
@@ -26,16 +26,42 @@ def tela_login():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.title("🩺 MedPlanner")
-        u = st.text_input("Usuário")
-        p = st.text_input("Senha", type="password")
-        if st.button("Acessar", type="primary", use_container_width=True):
-            ok, nome = verificar_login(u, p)
-            if ok:
-                st.session_state['logado'] = True
-                st.session_state['u_nome'] = nome
-                st.rerun()
-            else:
-                st.error("Erro no login")
+        
+        # Implementação das abas para Login e Cadastro
+        tab_login, tab_cadastro = st.tabs(["Acessar", "Criar Conta"])
+        
+        with tab_login:
+            u = st.text_input("Usuário", key="u_login")
+            p = st.text_input("Senha", type="password", key="p_login")
+            if st.button("Acessar", type="primary", use_container_width=True, key="btn_login"):
+                ok, nome = verificar_login(u, p)
+                if ok:
+                    st.session_state['logado'] = True
+                    st.session_state['u_nome'] = nome
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos")
+                    
+        with tab_cadastro:
+            st.subheader("Nova Conta")
+            novo_n = st.text_input("Nome Completo", placeholder="Ex: Dr. Vitor Dinizio")
+            novo_u = st.text_input("Nome de Usuário", placeholder="Para fazer login")
+            novo_p = st.text_input("Escolha uma Senha", type="password", key="p_new")
+            confirmar_p = st.text_input("Confirme a Senha", type="password", key="p_confirm")
+            
+            if st.button("Cadastrar", use_container_width=True, key="btn_cadastro"):
+                if novo_p != confirmar_p:
+                    st.warning("As senhas não coincidem.")
+                elif novo_u and novo_p and novo_n:
+                    # Chama a função que já existe no seu database.py
+                    sucesso, msg = criar_usuario(novo_u, novo_p, novo_n)
+                    if sucesso:
+                        st.success(f"✅ {msg}")
+                        st.info("Agora você já pode fazer login na aba 'Acessar'.")
+                    else:
+                        st.error(msg)
+                else:
+                    st.warning("Preencha todos os campos obrigatórios.")
 
 def app_principal():
     conn = get_connection()
@@ -80,7 +106,6 @@ def app_principal():
             total_bg = col1.number_input("Total de Questões", 1, 1000, 50)
             acerto_bg = col2.number_input("Total de Acertos", 0, 1000, 35)
             if st.button("Salvar Banco Geral", type="primary", use_container_width=True):
-                # No banco, tratamos como uma área específica chamada 'Banco Geral'
                 st.toast(registrar_estudo("Banco Geral - Livre", acerto_bg, total_bg, data_personalizada=dt))
                 st.rerun()
 
@@ -89,7 +114,6 @@ def app_principal():
             st.session_state['logado'] = False
             st.rerun()
 
-    # Navegação por Abas
     t_dash, t_agenda, t_video, t_config = st.tabs(["📊 DASHBOARD", "📅 AGENDA", "📚 VIDEOTECA", "⚙️ AJUSTES"])
     
     with t_dash:
@@ -102,8 +126,13 @@ def app_principal():
         from videoteca import render_videoteca
         render_videoteca(conn)
     with t_config:
-        from gerenciar import render_configuracoes
-        render_configuracoes(conn)
+        # Note: 'gerenciar' module was not found in files, but render_configuracoes 
+        # is called here based on the original app.py logic
+        try:
+            from gerenciar import render_configuracoes
+            render_configuracoes(conn)
+        except ImportError:
+            st.warning("Módulo de configurações não encontrado.")
         
     conn.close()
 
