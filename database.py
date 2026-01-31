@@ -6,10 +6,11 @@ import bcrypt
 DB_NAME = 'dados_medcof.db'
 
 def get_connection():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+    # Adicionado timeout para evitar o erro de 'database is locked'
+    return sqlite3.connect(DB_NAME, check_same_thread=False, timeout=30)
 
 # ==========================================
-# ⚙️ MÓDULO 1: INICIALIZAÇÃO E MANUTENÇÃO
+# ⚙️ MÓDULO 1: INICIALIZAÇÃO
 # ==========================================
 
 def inicializar_db():
@@ -30,8 +31,7 @@ def inicializar_db():
     try:
         from aulas_medcof import DADOS_LIMPOS
         conn = get_connection(); c = conn.cursor()
-        contagem = c.execute("SELECT COUNT(*) FROM assuntos").fetchone()[0]
-        if contagem == 0:
+        if c.execute("SELECT COUNT(*) FROM assuntos").fetchone()[0] == 0:
             c.executemany("INSERT OR IGNORE INTO assuntos (nome, grande_area) VALUES (?, ?)", DADOS_LIMPOS)
             conn.commit()
         conn.close()
@@ -44,7 +44,7 @@ def padronizar_areas():
     conn.commit(); conn.close()
 
 # ==========================================
-# 👤 MÓDULO 2: USUÁRIOS E SEGURANÇA
+# 👤 MÓDULO 2: USUÁRIOS
 # ==========================================
 
 def criar_usuario(username, password, nome):
@@ -52,7 +52,7 @@ def criar_usuario(username, password, nome):
     try:
         hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
         c.execute("INSERT INTO usuarios (username, nome, password_hash) VALUES (?,?,?)", (username, nome, hashed))
-        conn.commit(); return True, "Usuário criado com sucesso!"
+        conn.commit(); return True, "Usuário criado!"
     except: return False, "Usuário já existe."
     finally: conn.close()
 
@@ -64,7 +64,7 @@ def verificar_login(username, password):
     return False, None
 
 # ==========================================
-# 📝 MÓDULO 3: REGISTROS E SRS
+# 📝 MÓDULO 3: REGISTROS E SIMULADOS
 # ==========================================
 
 def registrar_estudo(nome_assunto, acertos, total, data_personalizada=None):
@@ -75,8 +75,6 @@ def registrar_estudo(nome_assunto, acertos, total, data_personalizada=None):
     
     aid, area = res
     c.execute("INSERT INTO historico (assunto_id, data_estudo, acertos, total, percentual) VALUES (?,?,?,?,?)", (aid, dt, acertos, total, (acertos/total*100)))
-    
-    # Agenda 1 Semana
     c.execute("INSERT INTO revisoes (assunto_id, data_agendada, tipo) VALUES (?,?,?)", (aid, dt + timedelta(days=7), "1 Semana"))
     
     adicionar_xp(int(total * 2), conn)
@@ -84,7 +82,6 @@ def registrar_estudo(nome_assunto, acertos, total, data_personalizada=None):
     conn.commit(); conn.close(); return "✅ Registrado!"
 
 def registrar_simulado(dados, data_personalizada=None):
-    """Registo por área para simulados."""
     conn = get_connection(); c = conn.cursor()
     dt = data_personalizada if data_personalizada else datetime.now().date()
     total_q = 0
@@ -96,19 +93,6 @@ def registrar_simulado(dados, data_personalizada=None):
             c.execute("INSERT INTO historico (assunto_id, data_estudo, acertos, total, percentual) VALUES (?,?,?,?,?)", (aid, dt, v['acertos'], v['total'], (v['acertos']/v['total']*100)))
     adicionar_xp(int(total_q * 2.5), conn); processar_progresso_missao("questoes", total_q)
     conn.commit(); conn.close(); return "✅ Simulado registrado!"
-
-def concluir_revisao(rid, acertos, total):
-    conn = get_connection(); c = conn.cursor()
-    rev = c.execute("SELECT assunto_id, tipo FROM revisoes WHERE id=?", (rid,)).fetchone()
-    if not rev: return "Erro."
-    aid, tipo_atual = rev
-    saltos = {"1 Semana": (30, "1 Mês"), "1 Mês": (60, "2 Meses"), "2 Meses": (120, "4 Meses"), "4 Meses": (0, "Finalizado")}
-    dias, prox = saltos.get(tipo_atual, (0, "Finalizado"))
-    c.execute("UPDATE revisoes SET status='Concluido' WHERE id=?", (rid,))
-    if prox != "Finalizado":
-        c.execute("INSERT INTO revisoes (assunto_id, data_agendada, tipo) VALUES (?,?,?)", (aid, datetime.now().date() + timedelta(days=dias), prox))
-    adicionar_xp(100, conn); processar_progresso_missao("revisao", 1)
-    conn.commit(); conn.close(); return "🚀 Revisado!"
 
 # ==========================================
 # 📚 MÓDULO 4: VIDEOTECA
@@ -164,6 +148,19 @@ def processar_progresso_missao(tipo_acao, quantidade):
 def get_progresso_hoje():
     conn = get_connection(); r = conn.cursor().execute("SELECT SUM(total) FROM historico WHERE data_estudo=?", (datetime.now().date(),)).fetchone()
     conn.close(); return r[0] if r[0] else 0
+
+def concluir_revisao(rid, acertos, total):
+    conn = get_connection(); c = conn.cursor()
+    rev = c.execute("SELECT assunto_id, tipo FROM revisoes WHERE id=?", (rid,)).fetchone()
+    if not rev: return "Erro."
+    aid, tipo_atual = rev
+    saltos = {"1 Semana": (30, "1 Mês"), "1 Mês": (60, "2 Meses"), "2 Meses": (120, "4 Meses"), "4 Meses": (0, "Finalizado")}
+    dias, prox = saltos.get(tipo_atual, (0, "Finalizado"))
+    c.execute("UPDATE revisoes SET status='Concluido' WHERE id=?", (rid,))
+    if prox != "Finalizado":
+        c.execute("INSERT INTO revisoes (assunto_id, data_agendada, tipo) VALUES (?,?,?)", (aid, datetime.now().date() + timedelta(days=dias), prox))
+    adicionar_xp(100, conn); processar_progresso_missao("revisao", 1)
+    conn.commit(); conn.close(); return "🚀 Revisado!"
 
 def listar_revisoes_completas():
     conn = get_connection()
