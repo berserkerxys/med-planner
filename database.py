@@ -83,24 +83,35 @@ def registrar_estudo(nome_assunto, acertos, total, data_personalizada=None):
     processar_progresso_missao("questoes", total)
     conn.commit(); conn.close(); return "✅ Registrado!"
 
+def registrar_simulado(dados, data_personalizada=None):
+    """Registo por área para simulados."""
+    conn = get_connection(); c = conn.cursor()
+    dt = data_personalizada if data_personalizada else datetime.now().date()
+    total_q = 0
+    for area, v in dados.items():
+        if v['total'] > 0:
+            total_q += v['total']
+            c.execute("INSERT OR IGNORE INTO assuntos (nome, grande_area) VALUES (?,?)", (f"Simulado - {area}", area))
+            aid = c.execute("SELECT id FROM assuntos WHERE nome=?", (f"Simulado - {area}",)).fetchone()[0]
+            c.execute("INSERT INTO historico (assunto_id, data_estudo, acertos, total, percentual) VALUES (?,?,?,?,?)", (aid, dt, v['acertos'], v['total'], (v['acertos']/v['total']*100)))
+    adicionar_xp(int(total_q * 2.5), conn); processar_progresso_missao("questoes", total_q)
+    conn.commit(); conn.close(); return "✅ Simulado registrado!"
+
 def concluir_revisao(rid, acertos, total):
     conn = get_connection(); c = conn.cursor()
     rev = c.execute("SELECT assunto_id, tipo FROM revisoes WHERE id=?", (rid,)).fetchone()
     if not rev: return "Erro."
-    
     aid, tipo_atual = rev
     saltos = {"1 Semana": (30, "1 Mês"), "1 Mês": (60, "2 Meses"), "2 Meses": (120, "4 Meses"), "4 Meses": (0, "Finalizado")}
     dias, prox = saltos.get(tipo_atual, (0, "Finalizado"))
-    
     c.execute("UPDATE revisoes SET status='Concluido' WHERE id=?", (rid,))
     if prox != "Finalizado":
         c.execute("INSERT INTO revisoes (assunto_id, data_agendada, tipo) VALUES (?,?,?)", (aid, datetime.now().date() + timedelta(days=dias), prox))
-    
     adicionar_xp(100, conn); processar_progresso_missao("revisao", 1)
     conn.commit(); conn.close(); return "🚀 Revisado!"
 
 # ==========================================
-# 📚 MÓDULO 4: VIDEOTECA (FUNÇÕES QUE FALTAVAM)
+# 📚 MÓDULO 4: VIDEOTECA
 # ==========================================
 
 def listar_conteudo_videoteca():
@@ -140,7 +151,6 @@ def adicionar_xp(qtd, conn):
 def processar_progresso_missao(tipo_acao, quantidade):
     conn = get_connection(); c = conn.cursor(); hoje = datetime.now().date()
     c.execute("UPDATE missoes_hoje SET progresso_atual = progresso_atual + ? WHERE data_missao = ? AND tipo = ? AND concluida = 0", (quantidade, hoje, tipo_acao))
-    # Verifica se alguma missão foi concluída para dar XP
     concluidas = c.execute("SELECT id, xp_recompensa FROM missoes_hoje WHERE progresso_atual >= meta_valor AND concluida = 0").fetchall()
     for mid, xp in concluidas:
         c.execute("UPDATE missoes_hoje SET concluida = 1 WHERE id = ?", (mid,))
