@@ -5,12 +5,22 @@ import plotly.graph_objects as go
 from database import get_status_gamer, get_progresso_hoje
 
 def render_dashboard(conn):
+    # Verifica login
+    if 'username' not in st.session_state:
+        st.warning("Por favor, faça login.")
+        return
+    u = st.session_state.username
+
     # --- 1. CABEÇALHO GAMIFICADO ---
-    perfil, missoes = get_status_gamer()
+    perfil, missoes = get_status_gamer(u)
     
+    if not perfil:
+        st.info("Perfil não encontrado. Registe o seu primeiro estudo!")
+        return
+
     st.markdown(f"## 🩺 {perfil['titulo']} - Nível {perfil['nivel']}")
     
-    # Barra de XP com design limpo
+    # Barra de XP
     xp_atual = perfil['xp_atual']
     xp_prox = perfil['xp_proximo']
     progresso_xp = xp_atual / xp_prox if xp_prox > 0 else 0
@@ -24,13 +34,13 @@ def render_dashboard(conn):
 
     st.divider()
 
-    # --- 2. METAS E MISSÕES ---
+    # --- 2. META DIÁRIA E MISSÕES ---
     col_meta, col_missoes = st.columns([1, 2])
     
     with col_meta:
         st.subheader("🎯 Meta Diária")
-        questoes_hoje = get_progresso_hoje()
-        meta_hoje = 50 
+        questoes_hoje = get_progresso_hoje(u)
+        meta_hoje = 50 # Padrão, ou ler de config
         
         fig_meta = go.Figure(go.Indicator(
             mode = "gauge+number",
@@ -56,22 +66,29 @@ def render_dashboard(conn):
 
     with col_missoes:
         st.subheader("⚔️ Missões do Dia")
-        if missoes.empty:
-            st.info("Nenhuma missão disponível para hoje.")
+        if missoes is None or missoes.empty:
+            st.info("Nenhuma missão ativa hoje.")
         else:
             for _, m in missoes.iterrows():
                 with st.container(border=True):
-                    prog_m = m['progresso_atual'] / m['meta_valor']
+                    # Calcula progresso da missão
+                    prog_m = m['progresso_atual'] / m['meta_valor'] if m['meta_valor'] > 0 else 0
                     status_m = "✅" if m['concluida'] else "⏳"
+                    
                     st.markdown(f"**{status_m} {m['descricao']}**")
                     st.progress(min(prog_m, 1.0))
-                    st.caption(f"XP: +{m['xp_recompensa']} | Progresso: {m['progresso_atual']}/{m['meta_valor']}")
+                    
+                    # Detalhes pequenos
+                    c_detalhe1, c_detalhe2 = st.columns([1, 1])
+                    c_detalhe1.caption(f"Progresso: {m['progresso_atual']}/{m['meta_valor']}")
+                    c_detalhe2.caption(f"XP: +{m['xp_recompensa']}")
 
     st.divider()
 
-    # --- 3. PERFORMANCE POR ÁREA (LIMPEZA DE G.O. E CORES) ---
+    # --- 3. PERFORMANCE POR ÁREA ---
     st.subheader("📊 Desempenho por Especialidade")
     
+    # Query que unifica G.O. visualmente caso ainda haja dispersão
     query_perf = """
         SELECT 
             CASE 
@@ -82,9 +99,10 @@ def render_dashboard(conn):
             SUM(h.total) as total_questoes
         FROM historico h
         JOIN assuntos a ON h.assunto_id = a.id
+        WHERE h.usuario_id = ?
         GROUP BY area
     """
-    df_perf = pd.read_sql(query_perf, conn)
+    df_perf = pd.read_sql(query_perf, conn, params=(u,))
     
     if df_perf.empty:
         st.warning("Ainda não há dados de histórico para gerar os gráficos.")
@@ -93,12 +111,14 @@ def render_dashboard(conn):
         
         col_bar, col_pie = st.columns([1.8, 1.2])
         
+        # Mapa de Cores Padronizado
         color_map = {
             'Cirurgia': '#3b82f6',
             'Clínica Médica': '#10b981',
             'G.O.': '#ec4899',
             'Pediatria': '#f59e0b',
-            'Preventiva': '#6366f1'
+            'Preventiva': '#6366f1',
+            'Banco Geral': '#94a3b8'
         }
 
         with col_bar:
@@ -111,7 +131,7 @@ def render_dashboard(conn):
                 color_discrete_map=color_map,
                 title="Aproveitamento (%)"
             )
-            # Forçar eixo X como categoria para evitar problemas de data se o nome for estranho
+            # Limpeza do eixo X
             fig_bar.update_xaxes(type='category', title_text=None)
             fig_bar.update_layout(showlegend=False, yaxis_range=[0, 105], height=350, margin=dict(t=50, b=20))
             st.plotly_chart(fig_bar, use_container_width=True)
@@ -129,27 +149,30 @@ def render_dashboard(conn):
             fig_pie.update_layout(height=350, margin=dict(t=50, b=20))
             st.plotly_chart(fig_pie, use_container_width=True)
 
-    # --- 4. EVOLUÇÃO TEMPORAL (CORREÇÃO DE EIXOS E INFORMAÇÃO POLUÍDA) ---
+    # --- 4. EVOLUÇÃO TEMPORAL ---
     st.divider()
     st.subheader("📈 Evolução da Performance")
     
     periodo = st.radio("Agrupar evolução por:", ["Dia", "Semana", "Mês"], horizontal=True, label_visibility="collapsed")
     
+    # Query dinâmica baseada no período
     if periodo == "Dia":
-        query_evo = "SELECT data_estudo as periodo, AVG(percentual) as media FROM historico GROUP BY periodo ORDER BY periodo"
+        query_evo = "SELECT data_estudo as periodo, AVG(percentual) as media FROM historico WHERE usuario_id = ? GROUP BY periodo ORDER BY periodo"
     elif periodo == "Semana":
-        query_evo = "SELECT strftime('%Y-%W', data_estudo) as periodo, AVG(percentual) as media FROM historico GROUP BY periodo ORDER BY periodo"
+        # Agrupamento por semana (ISO Week)
+        query_evo = "SELECT strftime('%Y-%W', data_estudo) as periodo, AVG(percentual) as media FROM historico WHERE usuario_id = ? GROUP BY periodo ORDER BY periodo"
     else:
-        query_evo = "SELECT strftime('%Y-%m', data_estudo) as periodo, AVG(percentual) as media FROM historico GROUP BY periodo ORDER BY periodo"
+        # Agrupamento por mês
+        query_evo = "SELECT strftime('%Y-%m', data_estudo) as periodo, AVG(percentual) as media FROM historico WHERE usuario_id = ? GROUP BY periodo ORDER BY periodo"
         
-    df_evo = pd.read_sql(query_evo, conn)
+    df_evo = pd.read_sql(query_evo, conn, params=(u,))
     
     if not df_evo.empty:
-        # Limpeza de nomes para evitar poluição no eixo X
+        # Formatação de rótulos para remover informações desnecessárias (timestamp)
         if periodo == "Dia":
             df_evo['label_periodo'] = pd.to_datetime(df_evo['periodo']).dt.strftime('%d/%m/%y')
         elif periodo == "Semana":
-            df_evo['label_periodo'] = df_evo['periodo'].apply(lambda x: f"Sem {x.split('-')[1]}")
+            df_evo['label_periodo'] = df_evo['periodo'].apply(lambda x: f"Sem {x.split('-')[1] if '-' in x else x}")
         else:
             df_evo['label_periodo'] = pd.to_datetime(df_evo['periodo']).dt.strftime('%b/%y')
 
@@ -161,10 +184,10 @@ def render_dashboard(conn):
             title=f"Aproveitamento Médio por {periodo}",
             labels={'media': 'Acertos (%)', 'label_periodo': 'Período'}
         )
-        # SOLUÇÃO PARA O ERRO DA IMAGEM: Forçar tipo categoria e remover milissegundos
+        # Forçar categoria remove a tentativa do Plotly de interpolar datas (limpando o eixo X)
         fig_evo.update_xaxes(type='category', title_text=None)
         fig_evo.update_traces(line_color='#3b82f6', line_width=3, marker=dict(size=8))
         fig_evo.update_layout(yaxis_range=[0, 105], height=400, margin=dict(t=50, b=20))
         st.plotly_chart(fig_evo, use_container_width=True)
     else:
-        st.info("Continue estudando para gerar dados de evolução.")
+        st.info("Continue a estudar para gerar dados de evolução.")

@@ -1,14 +1,14 @@
 import streamlit as st
-from datetime import datetime
 import pandas as pd
+from datetime import datetime
 from database import (
-    verificar_login, criar_usuario, get_connection, registrar_estudo, 
-    registrar_simulado, get_progresso_hoje
+    verificar_login, criar_usuario, get_connection, 
+    registrar_estudo, registrar_simulado, get_progresso_hoje
 )
 
 st.set_page_config(page_title="MedPlanner", page_icon="🩺", layout="wide", initial_sidebar_state="collapsed")
 
-# Estilos CSS para centralizar e organizar as abas
+# Estilos CSS
 st.markdown("""
     <style>
     [data-testid="stSidebarNav"] {display: none;}
@@ -26,97 +26,93 @@ def tela_login():
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.title("🩺 MedPlanner")
+        t1, t2 = st.tabs(["Acessar", "Criar Conta"])
         
-        # Implementação das abas para Login e Cadastro
-        tab_login, tab_cadastro = st.tabs(["Acessar", "Criar Conta"])
+        with t1:
+            with st.form("l"):
+                u = st.text_input("Usuário", key="login_u")
+                p = st.text_input("Senha", type="password", key="login_p")
+                if st.form_submit_button("Entrar", type="primary", use_container_width=True):
+                    ok, nome = verificar_login(u, p)
+                    if ok:
+                        st.session_state['logado'] = True
+                        st.session_state['username'] = u
+                        st.session_state['u_nome'] = nome
+                        st.rerun()
+                    else: 
+                        st.error("Erro no login")
         
-        with tab_login:
-            u = st.text_input("Usuário", key="u_login")
-            p = st.text_input("Senha", type="password", key="p_login")
-            if st.button("Acessar", type="primary", use_container_width=True, key="btn_login"):
-                ok, nome = verificar_login(u, p)
-                if ok:
-                    st.session_state['logado'] = True
-                    st.session_state['u_nome'] = nome
-                    st.rerun()
-                else:
-                    st.error("Usuário ou senha incorretos")
-                    
-        with tab_cadastro:
-            st.subheader("Nova Conta")
-            novo_n = st.text_input("Nome Completo", placeholder="Ex: Dr. Vitor Dinizio")
-            novo_u = st.text_input("Nome de Usuário", placeholder="Para fazer login")
-            novo_p = st.text_input("Escolha uma Senha", type="password", key="p_new")
-            confirmar_p = st.text_input("Confirme a Senha", type="password", key="p_confirm")
-            
-            if st.button("Cadastrar", use_container_width=True, key="btn_cadastro"):
-                if novo_p != confirmar_p:
-                    st.warning("As senhas não coincidem.")
-                elif novo_u and novo_p and novo_n:
-                    # Chama a função que já existe no seu database.py
-                    sucesso, msg = criar_usuario(novo_u, novo_p, novo_n)
-                    if sucesso:
-                        st.success(f"✅ {msg}")
-                        st.info("Agora você já pode fazer login na aba 'Acessar'.")
+        with t2:
+            with st.form("r"):
+                nu = st.text_input("Usuário novo"); nn = st.text_input("Nome"); np = st.text_input("Senha nova", type="password")
+                if st.form_submit_button("Registrar"):
+                    ok, msg = criar_usuario(nu, np, nn)
+                    # Correção do erro de SyntaxError/AST: Usando if/else bloco padrão
+                    if ok:
+                        st.success(msg)
                     else:
                         st.error(msg)
-                else:
-                    st.warning("Preencha todos os campos obrigatórios.")
 
 def app_principal():
+    u = st.session_state.username
     conn = get_connection()
     
     with st.sidebar:
         st.title(f"Olá, {st.session_state.get('u_nome', 'Doc')} 👋")
-        st.metric("Questões Hoje", get_progresso_hoje())
+        st.metric("Questões Hoje", get_progresso_hoje(u))
         st.divider()
         
         st.subheader("📝 Novo Estudo")
-        modo = st.radio("Selecione o Modo:", ["Por Tema", "Simulado Geral", "Banco Geral"], label_visibility="collapsed")
-        dt = st.date_input("Data do Registro", datetime.now())
+        modo = st.radio("Modo:", ["Por Tema", "Simulado Geral", "Banco Geral"], label_visibility="collapsed")
+        dt = st.date_input("Data", datetime.now())
         
         if modo == "Por Tema":
             df_as = pd.read_sql("SELECT nome FROM assuntos ORDER BY nome", conn)
-            escolha = st.selectbox("Aula:", df_as['nome'].tolist())
-            col1, col2 = st.columns(2)
-            total = col1.number_input("Total", 1, 500, 10)
-            acerto = col2.number_input("Acertos", 0, 500, 8)
+            # Proteção caso a lista esteja vazia
+            lista_aulas = df_as['nome'].tolist()
+            esc = st.selectbox("Aula:", lista_aulas) if lista_aulas else None
+            
+            c1, c2 = st.columns(2)
+            tot = c1.number_input("Total", 1, 500, 10)
+            ac = c2.number_input("Acertos", 0, tot, 8)
+            
             if st.button("Salvar Registro", type="primary", use_container_width=True):
-                st.toast(registrar_estudo(escolha, acerto, total, data_personalizada=dt))
-                st.rerun()
-                
+                if esc:
+                    st.toast(registrar_estudo(u, esc, ac, tot, data_personalizada=dt))
+                else:
+                    st.error("Nenhuma aula selecionada.")
+
         elif modo == "Simulado Geral":
-            st.info("Insira o desempenho por área (Padrão 20 questões/área)")
+            st.info("Insira o desempenho por área:")
             areas = ["Cirurgia", "Clínica Médica", "G.O.", "Pediatria", "Preventiva"]
-            dados_simulado = {}
-            for area in areas:
-                with st.expander(f"📍 {area}", expanded=False):
+            dados = {}
+            for a in areas:
+                with st.expander(f"📍 {a}", expanded=False):
                     c1, c2 = st.columns(2)
-                    t_area = c1.number_input(f"Total - {area}", 0, 100, 20, key=f"t_{area}")
-                    a_area = c2.number_input(f"Acertos - {area}", 0, 100, 15, key=f"a_{area}")
-                    dados_simulado[area] = {'acertos': a_area, 'total': t_area}
+                    t_a = c1.number_input(f"Total {a}", 0, 100, 20, key=f"t_{a}")
+                    a_a = c2.number_input(f"Acertos {a}", 0, t_a, 15, key=f"a_{a}")
+                    dados[a] = {'acertos': a_a, 'total': t_a}
             
             if st.button("Salvar Simulado", type="primary", use_container_width=True):
-                st.toast(registrar_simulado(dados_simulado, data_personalizada=dt))
-                st.rerun()
-                
+                st.toast(registrar_simulado(u, dados, data_personalizada=dt))
+
         elif modo == "Banco Geral":
-            st.info("Registro sem área específica (Estudo livre)")
-            col1, col2 = st.columns(2)
-            total_bg = col1.number_input("Total de Questões", 1, 1000, 50)
-            acerto_bg = col2.number_input("Total de Acertos", 0, 1000, 35)
-            if st.button("Salvar Banco Geral", type="primary", use_container_width=True):
-                st.toast(registrar_estudo("Banco Geral - Livre", acerto_bg, total_bg, data_personalizada=dt))
-                st.rerun()
+            st.info("Treino livre")
+            c1, c2 = st.columns(2)
+            tot = c1.number_input("Total Questões", 1, 500, 50)
+            ac = c2.number_input("Acertos", 0, tot, 35)
+            if st.button("Salvar Banco", type="primary", use_container_width=True):
+                st.toast(registrar_estudo(u, "Banco Geral - Livre", ac, tot, data_personalizada=dt))
 
         st.divider()
         if st.button("Sair"):
-            st.session_state['logado'] = False
+            st.session_state.logado = False
             st.rerun()
 
+    # NAVEGAÇÃO
     t_dash, t_agenda, t_video, t_config = st.tabs(["📊 DASHBOARD", "📅 AGENDA", "📚 VIDEOTECA", "⚙️ AJUSTES"])
     
-    with t_dash:
+    with t_dash: 
         from dashboard import render_dashboard
         render_dashboard(conn)
     with t_agenda:
@@ -126,14 +122,9 @@ def app_principal():
         from videoteca import render_videoteca
         render_videoteca(conn)
     with t_config:
-        # Note: 'gerenciar' module was not found in files, but render_configuracoes 
-        # is called here based on the original app.py logic
-        try:
-            from gerenciar import render_configuracoes
-            render_configuracoes(conn)
-        except ImportError:
-            st.warning("Módulo de configurações não encontrado.")
-        
+        from gerenciar import render_configuracoes
+        render_configuracoes(conn)
+    
     conn.close()
 
 if st.session_state['logado']:
